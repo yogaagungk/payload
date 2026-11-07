@@ -324,3 +324,39 @@ func TestCLIShipRequireApprovalRejected(t *testing.T) {
 		t.Fatalf("error = %v, want exit code 3", err)
 	}
 }
+
+func TestCLIShipApprovalTerminalExitCodes(t *testing.T) {
+	work := t.TempDir()
+	gitCmd(t, work, "init", "-b", "main")
+	gitCmd(t, work, "config", "user.name", "Test")
+	gitCmd(t, work, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(work, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "add", "file")
+	gitCmd(t, work, "commit", "-m", "initial")
+	t.Chdir(work)
+	t.Setenv("GITHUB_TOKEN", "github-token")
+	t.Setenv("HOUSTON_WEBHOOK_TOKEN", "houston-token")
+
+	for status, want := range map[string]int{"expired": 4, "dispatch_failed": 5} {
+		t.Run(status, func(t *testing.T) {
+			houston := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				current := "pending"
+				if r.Method == http.MethodGet {
+					current = status
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id": "0123456789abcdef0123456789abcdef", "status": current, "created_at": time.Now().UTC(),
+				})
+			}))
+			defer houston.Close()
+			_, _, err := runCLI(t, "ship", "--require-approval", "--no-push", "--plain",
+				"--repo", "owner/repo", "--houston-url", houston.URL, "--poll", "1ms", "--approval-timeout", "5s")
+			var coded interface{ ExitCode() int }
+			if !errors.As(err, &coded) || coded.ExitCode() != want {
+				t.Fatalf("error = %v, want exit code %d", err, want)
+			}
+		})
+	}
+}
