@@ -33,7 +33,7 @@ payload init --stack static --app site --workflow .github/workflows/release.yml
 ```
 
 Flags: `--stack go|node|python|static`, `--port`, `--app`, `--health-path`,
-`--dir`, `--workflow`, `--yes`.
+`--dir`, `--workflow`, `--yes`, `--merge`, `--diff`.
 
 `init` writes `Dockerfile` only when none exists, and creates or updates a
 workflow (default `.github/workflows/deploy.yml`, or the first existing
@@ -48,6 +48,13 @@ workflow that contains a `payload-*` step). Re-running is idempotent:
 - A broken existing workflow is left untouched and reported as an error.
 - An existing `Dockerfile` is never overwritten.
 
+Existing **unmanaged** workflows (no `payload-*` step) are never rewritten by
+default: `init` prints a unified diff and exits non-zero. Use `--diff` for a
+read-only preview or `--merge` to apply; the first merge writes
+`deploy.yml.bak`, and existing triggers are kept as written (only a missing
+`workflow_dispatch.inputs.image_tag` is added to a mapping `on`). If `on` is a
+list or scalar it is left alone and a warning is printed.
+
 The generated workflow passes `actionlint`.
 
 ## Generated deployment flow (ADR-006)
@@ -57,11 +64,18 @@ The generated workflow passes `actionlint`.
    packages write).
 2. SSH with `StrictHostKeyChecking=yes` and `DEPLOY_KNOWN_HOSTS`; the key is
    written from `DEPLOY_SSH_KEY` to a 0600 file.
-3. On the VPS: `docker login ghcr.io`, pull, run `<app>-next` with
-   `--env-file /var/lib/lander/env/<app>.env` bound to `127.0.0.1:<port>`,
-   wait up to 30 s for the health path, then swap containers. A failed health
-   check removes the new container and keeps the previous one running.
-4. `workflow_dispatch` accepts `image_tag` for rollback to an earlier image.
+3. Values are validated in the runner script (`image_tag`, app name, ports,
+   health path) and sent to the VPS on stdin, not in the SSH command line.
+4. On the VPS: `docker login ghcr.io`, pull, start `<app>-next` on an
+   ephemeral loopback port, read it with `docker port`, and health-check it for
+   up to 30 s. On success the old container is stopped/renamed and the final
+   `<app>` starts on `127.0.0.1:<port>`; if that start or its health check
+   fails, the previous `-old` container is restarted and the job fails.
+5. `workflow_dispatch` accepts `image_tag` for rollback to an earlier image.
+
+Verify on the first real deploy (E1) that the workflow's `GITHUB_TOKEN` can
+pull the private GHCR package on the VPS; this is not exercised by local
+tests.
 
 Required repository secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PORT`,
 `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` (for example via `blackbox sync`).

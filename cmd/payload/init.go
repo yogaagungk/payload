@@ -24,6 +24,8 @@ func (a *app) initCmd() *cobra.Command {
 		dir        string
 		workflow   string
 		yes        bool
+		merge      bool
+		diffOnly   bool
 	)
 
 	cmd := &cobra.Command{
@@ -102,9 +104,41 @@ func (a *app) initCmd() *cobra.Command {
 			} else if !filepath.IsAbs(workflowPath) {
 				workflowPath = filepath.Join(dir, workflowPath)
 			}
-			changed, err := service.EnsureWorkflow(workflowPath, opts)
+			plan, err := service.PlanWorkflow(workflowPath, opts)
 			if err != nil {
 				return err
+			}
+			for _, warning := range plan.Warnings {
+				_, _ = fmt.Fprintln(a.stderr, "warning:", warning)
+			}
+
+			status := "unchanged"
+			switch {
+			case !plan.Changed():
+			case diffOnly:
+				_, _ = fmt.Fprint(a.stdout, plan.Diff())
+				status = "diff only (not written)"
+			case len(plan.Existing) == 0 || plan.Managed || merge:
+				if err := plan.Write(); err != nil {
+					return err
+				}
+				status = "created/updated"
+			default:
+				_, _ = fmt.Fprint(a.stdout, plan.Diff())
+				if !interactive {
+					return fmt.Errorf("existing workflow %s is not payload-managed; review the diff and re-run with --merge", workflowPath)
+				}
+				answer, err := prompt(reader, a.stdout, "Merge into existing unmanaged workflow?", "n")
+				if err != nil {
+					return err
+				}
+				if !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "yes") {
+					return fmt.Errorf("workflow not merged; re-run with --merge to apply")
+				}
+				if err := plan.Write(); err != nil {
+					return err
+				}
+				status = "merged into unmanaged workflow"
 			}
 
 			_, _ = fmt.Fprintf(a.stdout, "Initialized payload for %s (%s, port %d)\n", appName, stack, port)
@@ -112,10 +146,6 @@ func (a *app) initCmd() *cobra.Command {
 				_, _ = fmt.Fprintf(a.stdout, "  Dockerfile: created %s\n", dockerfilePath)
 			} else {
 				_, _ = fmt.Fprintf(a.stdout, "  Dockerfile: kept existing %s\n", dockerfilePath)
-			}
-			status := "unchanged"
-			if changed {
-				status = "created/updated"
 			}
 			_, _ = fmt.Fprintf(a.stdout, "  workflow: %s (%s)\n", workflowPath, status)
 			_, _ = fmt.Fprintln(a.stdout, "  next: commit these files and set DEPLOY_* secrets (for example with blackbox sync)")
@@ -130,6 +160,8 @@ func (a *app) initCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dir, "dir", ".", "project directory")
 	cmd.Flags().StringVar(&workflow, "workflow", "", "workflow path (default: existing payload-managed file or .github/workflows/deploy.yml)")
 	cmd.Flags().BoolVar(&yes, "yes", false, "use defaults and never prompt")
+	cmd.Flags().BoolVar(&merge, "merge", false, "merge into an existing unmanaged workflow (writes a .bak first)")
+	cmd.Flags().BoolVar(&diffOnly, "diff", false, "print the proposed workflow diff without writing")
 	return cmd
 }
 

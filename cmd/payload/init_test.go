@@ -197,3 +197,102 @@ func TestResolveStackByName(t *testing.T) {
 		t.Fatalf("stack = %q, err = %v", stack, err)
 	}
 }
+
+func writeUnmanagedWorkflow(t *testing.T) string {
+	t.Helper()
+	if err := os.MkdirAll(".github/workflows", 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := ".github/workflows/deploy.yml"
+	content := `name: my deploy
+on: [push]
+jobs:
+  custom:
+    runs-on: ubuntu-latest
+    steps:
+      - name: my step
+        run: echo custom
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestCLIInitUnmanagedRequiresConsent(t *testing.T) {
+	t.Chdir(t.TempDir())
+	path := writeUnmanagedWorkflow(t)
+	// #nosec G304 -- path is built by the test itself.
+	before, _ := os.ReadFile(path)
+
+	stdout, _, err := runCLI(t, "init", "--yes", "--stack", "go", "--app", "demo")
+	if err == nil {
+		t.Fatal("unmanaged workflow was merged without consent")
+	}
+	if !strings.Contains(stdout, "proposed") {
+		t.Errorf("stdout missing diff: %q", stdout)
+	}
+	// #nosec G304 -- path is built by the test itself.
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Error("unmanaged workflow was modified")
+	}
+	if _, err := os.Stat(path + ".bak"); !os.IsNotExist(err) {
+		t.Error("a backup was written without merging")
+	}
+}
+
+func TestCLIInitDiffWritesNothing(t *testing.T) {
+	t.Chdir(t.TempDir())
+	path := writeUnmanagedWorkflow(t)
+	// #nosec G304 -- path is built by the test itself.
+	before, _ := os.ReadFile(path)
+
+	stdout, _, err := runCLI(t, "init", "--yes", "--diff", "--stack", "go", "--app", "demo")
+	if err != nil {
+		t.Fatalf("init --diff: %v", err)
+	}
+	if !strings.Contains(stdout, "proposed") {
+		t.Errorf("stdout missing diff: %q", stdout)
+	}
+	// #nosec G304 -- path is built by the test itself.
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Error("--diff modified the workflow")
+	}
+	if _, err := os.Stat(path + ".bak"); !os.IsNotExist(err) {
+		t.Error("--diff wrote a backup")
+	}
+}
+
+func TestCLIInitMergeUnmanaged(t *testing.T) {
+	t.Chdir(t.TempDir())
+	path := writeUnmanagedWorkflow(t)
+	// #nosec G304 -- path is built by the test itself.
+	before, _ := os.ReadFile(path)
+
+	_, _, err := runCLI(t, "init", "--yes", "--merge", "--stack", "go", "--app", "demo")
+	if err != nil {
+		t.Fatalf("init --merge: %v", err)
+	}
+	// #nosec G304 -- path is built by the test itself.
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(after, []byte("my step")) || !bytes.Contains(after, []byte("id: payload-deploy")) {
+		t.Errorf("merge lost content:\n%s", after)
+	}
+	if bytes.Contains(after, []byte("workflow_dispatch")) {
+		t.Error("triggers were rewritten for a non-mapping 'on'")
+	}
+	// #nosec G304 -- path is built by the test itself.
+	backup, err := os.ReadFile(path + ".bak")
+	if err != nil {
+		t.Fatalf("backup missing: %v", err)
+	}
+	if !bytes.Equal(backup, before) {
+		t.Error("backup does not hold the original")
+	}
+	runActionlintCLI(t, path)
+}
