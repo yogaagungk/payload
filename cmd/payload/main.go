@@ -47,7 +47,7 @@ func newRootCmd(a *app) *cobra.Command {
 	root.SetIn(a.stdin)
 	root.SetOut(a.stdout)
 	root.SetErr(a.stderr)
-	root.AddCommand(a.initCmd(), a.versionCmd())
+	root.AddCommand(a.initCmd(), a.shipCmd(), a.versionCmd())
 	return root
 }
 

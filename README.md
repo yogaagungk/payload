@@ -5,7 +5,8 @@ GitHub Actions deployment workflow (build, push to GHCR, deploy over SSH with
 a health check and rollback), and merges into existing workflows without
 losing manual edits.
 
-Status: P1 (`init`). `ship` (push, dispatch, log streaming, approval) is P2/P3.
+Status: P1 (`init`) and P2 (`ship`: push, dispatch, status/log streaming).
+The `--require-approval` flow is P3.
 
 ## Build
 
@@ -30,6 +31,16 @@ payload init --stack go --port 3000 --app my-api --yes
 
 # Write to a different workflow file
 payload init --stack static --app site --workflow .github/workflows/release.yml
+
+# Push the current branch, dispatch deploy.yml and stream the run
+GITHUB_TOKEN=... payload ship
+
+# Explicit branch/workflow/input, plain output
+payload ship --target main --workflow deploy.yml \
+  --input image_tag=abc123 --plain
+
+# Already pushed: skip git push
+payload ship --no-push
 ```
 
 Flags: `--stack go|node|python|static`, `--port`, `--app`, `--health-path`,
@@ -56,6 +67,27 @@ read-only preview or `--merge` to apply; the first merge writes
 list or scalar it is left alone and a warning is printed.
 
 The generated workflow passes `actionlint`.
+
+## ship
+
+`payload ship` pushes `HEAD` to the target branch (`--target`, default the
+current branch) with the local git CLI, dispatches
+`POST /repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches`, then
+polls the newest matching `workflow_dispatch` run (matched by `head_sha`).
+
+- Default output is a bubbletea TUI with run/job/step status and log tail;
+  `--plain` (or a non-terminal stdout) streams plain text.
+- GitHub returns job logs only when they become available; statuses are live
+  and each job's log is printed incrementally as the API serves it. A failed
+  run exits non-zero after printing the conclusion and run URL.
+- `--poll` (default 2s) and `--timeout` (default 30m) control waiting.
+- The token comes from `GITHUB_TOKEN` or a hidden prompt, never a flag. A
+  fine-grained PAT needs Actions: write and Contents: read; a classic PAT
+  needs `repo`.
+- `--repo` defaults to the origin remote; `--api` must be https (http only on
+  loopback for tests).
+- Approval gating (`--require-approval`) is not implemented yet; it lands in
+  P3 with the houston contract.
 
 ## Generated deployment flow (ADR-006)
 
