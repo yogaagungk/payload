@@ -360,3 +360,109 @@ func TestCLIShipApprovalTerminalExitCodes(t *testing.T) {
 		})
 	}
 }
+
+func approvalRepo(t *testing.T) {
+	t.Helper()
+	work := t.TempDir()
+	gitCmd(t, work, "init", "-b", "main")
+	gitCmd(t, work, "config", "user.name", "Test")
+	gitCmd(t, work, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(work, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "add", "file")
+	gitCmd(t, work, "commit", "-m", "initial")
+	t.Chdir(work)
+	t.Setenv("GITHUB_TOKEN", "github-token")
+	t.Setenv("HOUSTON_WEBHOOK_TOKEN", "houston-token")
+}
+
+func TestCLIShipApprovalNullRunID(t *testing.T) {
+	approvalRepo(t)
+	head := strings.TrimSpace(gitCmd(t, ".", "rev-parse", "HEAD"))
+	dispatched := false
+	var dispatchCalls int
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/dispatches"):
+			dispatchCalls++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/actions/runs":
+			runs := []map[string]any{}
+			if dispatched {
+				runs = append(runs, map[string]any{
+					"id": 88, "head_sha": head, "html_url": "https://example/run/88", "created_at": time.Now().UTC(),
+				})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": runs})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/actions/runs/88":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 88, "status": "completed", "conclusion": "success", "html_url": "https://example/run/88"})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/actions/runs/88/jobs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jobs": []map[string]any{{"id": 8, "name": "deploy", "status": "completed", "conclusion": "success", "steps": []any{}}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/actions/jobs/8/logs":
+			_, _ = w.Write([]byte("found the null-run deploy\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer github.Close()
+
+	houston := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status := "pending"
+		var runID any
+		if r.Method == http.MethodGet {
+			status = "dispatched"
+		} else {
+			dispatched = true // payload's own lookup should now see run 88
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "0123456789abcdef0123456789abcdef", "status": status, "run_id": runID,
+			"created_at": time.Now().UTC(),
+		})
+	}))
+	defer houston.Close()
+
+	stdout, _, err := runCLI(t, "ship", "--require-approval", "--no-push", "--plain",
+		"--repo", "owner/repo", "--api", github.URL, "--houston-url", houston.URL,
+		"--poll", "1ms", "--approval-timeout", "5s", "--timeout", "5s")
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if !strings.Contains(stdout, "found the null-run deploy") || !strings.Contains(stdout, "run 88 finished: success") {
+		t.Errorf("stdout = %q", stdout)
+	}
+	if dispatchCalls != 0 {
+		t.Errorf("payload dispatched directly %d times", dispatchCalls)
+	}
+}
+
+func TestCLIShipApprovalRetriesTransientPollError(t *testing.T) {
+	approvalRepo(t)
+	polls := 0
+	houston := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "0123456789abcdef0123456789abcdef", "status": "pending", "created_at": time.Now().UTC(),
+			})
+			return
+		}
+		polls++
+		if polls == 1 {
+			http.Error(w, "temporary", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "0123456789abcdef0123456789abcdef", "status": "rejected", "created_at": time.Now().UTC(),
+		})
+	}))
+	defer houston.Close()
+	_, _, err := runCLI(t, "ship", "--require-approval", "--no-push", "--plain",
+		"--repo", "owner/repo", "--houston-url", houston.URL, "--poll", "1ms", "--approval-timeout", "5s")
+	var coded interface{ ExitCode() int }
+	if !errors.As(err, &coded) || coded.ExitCode() != 3 {
+		t.Fatalf("error = %v, want rejected exit code after retry", err)
+	}
+	if polls < 2 {
+		t.Errorf("polls = %d, retry did not happen", polls)
+	}
+}

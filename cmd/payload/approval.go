@@ -91,7 +91,7 @@ func (a *app) shipWithApproval(ctx context.Context, opts service.ShipOptions, ho
 			return &exitError{code: 6, msg: fmt.Sprintf("timed out waiting for release %s", release.ID)}
 		case <-timer.C:
 		}
-		release, err = client.GetRelease(approvalCtx, release.ID)
+		updated, err := client.GetRelease(approvalCtx, release.ID)
 		if err != nil {
 			failures++
 			var apiErr *service.HoustonError
@@ -112,6 +112,7 @@ func (a *app) shipWithApproval(ctx context.Context, opts service.ShipOptions, ho
 			}
 			continue
 		}
+		release = updated
 		failures = 0
 	}
 }
