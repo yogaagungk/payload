@@ -30,6 +30,7 @@ func (a *app) shipCmd() *cobra.Command {
 		requireApproval bool
 		houstonURL      string
 		message         string
+		approvalTimeout time.Duration
 		timeout         time.Duration
 		poll            time.Duration
 	)
@@ -102,7 +103,7 @@ func (a *app) shipCmd() *cobra.Command {
 				if !plain && writerIsTerminal(a.stdout) {
 					_, _ = fmt.Fprintln(a.stderr, "note: approval mode streams plain text")
 				}
-				return a.shipWithApproval(ctx, opts, houstonURL, message)
+				return a.shipWithApproval(ctx, opts, houstonURL, message, approvalTimeout)
 			}
 
 			if plain || !writerIsTerminal(a.stdout) {
@@ -130,6 +131,7 @@ func (a *app) shipCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&requireApproval, "require-approval", false, "queue a houston approval instead of dispatching directly")
 	cmd.Flags().StringVar(&houstonURL, "houston-url", "", "houston base URL (default HOUSTON_URL)")
 	cmd.Flags().StringVar(&message, "message", "", "short release note shown in houston")
+	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", 24*time.Hour, "maximum time to wait for houston approval")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "maximum time to wait for the run")
 	cmd.Flags().DurationVar(&poll, "poll", 2*time.Second, "status polling interval")
 	return cmd

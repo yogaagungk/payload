@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,7 +20,7 @@ type exitError struct {
 func (e *exitError) Error() string { return e.msg }
 func (e *exitError) ExitCode() int { return e.code }
 
-func (a *app) shipWithApproval(ctx context.Context, opts service.ShipOptions, houstonURL, message string) error {
+func (a *app) shipWithApproval(ctx context.Context, opts service.ShipOptions, houstonURL, message string, approvalTimeout time.Duration) error {
 	base := strings.TrimSpace(houstonURL)
 	if base == "" {
 		base = strings.TrimSpace(os.Getenv("HOUSTON_URL"))
@@ -36,7 +37,6 @@ func (a *app) shipWithApproval(ctx context.Context, opts service.ShipOptions, ho
 		return errors.New("HOUSTON_WEBHOOK_TOKEN is required with --require-approval")
 	}
 
-	// Snapshot runs before queueing so the later lookup cannot pick an old run.
 	known := map[int64]bool{}
 	if existing, err := opts.Client.ListRuns(ctx, opts.Owner, opts.Repo, opts.Ref); err == nil {
 		for _, run := range existing {
@@ -49,20 +49,29 @@ func (a *app) shipWithApproval(ctx context.Context, opts service.ShipOptions, ho
 		requestedBy = strings.TrimSpace(os.Getenv("USER"))
 	}
 	client := &service.HoustonClient{BaseURL: validated, Token: token}
-	release, err := client.CreateRelease(ctx, service.ReleaseApprovalRequest{
+	release, created, err := client.CreateRelease(ctx, service.ReleaseApprovalRequest{
 		Repo: opts.Owner + "/" + opts.Repo, Ref: opts.Ref, SHA: opts.HeadSHA, Workflow: opts.Workflow,
 		Inputs: opts.Inputs, RequestedBy: requestedBy, Message: message,
 	})
 	if err != nil {
 		return err
 	}
+	if created {
+		_, _ = fmt.Fprintf(a.stdout, "queued release %s (waiting for approval in houston; expires %s)\n",
+			release.ID, release.ExpiresAt.Format("2006-01-02 15:04 UTC"))
+	} else {
+		_, _ = fmt.Fprintf(a.stdout, "existing pending release %s (expires %s)\n",
+			release.ID, release.ExpiresAt.Format("2006-01-02 15:04 UTC"))
+	}
 
-	pollCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	approvalCtx, cancel := context.WithTimeout(ctx, approvalTimeout)
 	defer cancel()
+	lastStatus := release.Status
+	failures := 0
 	for {
 		switch release.Status {
 		case "dispatched":
-			return a.followApprovedRelease(pollCtx, opts, release, known)
+			return a.followApprovedRelease(ctx, opts, release, known)
 		case "rejected":
 			return &exitError{code: 3, msg: fmt.Sprintf("release %s rejected", release.ID)}
 		case "expired":
@@ -77,18 +86,40 @@ func (a *app) shipWithApproval(ctx context.Context, opts service.ShipOptions, ho
 		default:
 			return fmt.Errorf("release %s has unknown status %q", release.ID, release.Status)
 		}
+		if release.Status != lastStatus {
+			lastStatus = release.Status
+			_, _ = fmt.Fprintf(a.stdout, "release %s: %s\n", release.ID, release.Status)
+		}
 
 		timer := time.NewTimer(opts.PollInterval)
 		select {
-		case <-pollCtx.Done():
+		case <-approvalCtx.Done():
 			timer.Stop()
 			return &exitError{code: 6, msg: fmt.Sprintf("timed out waiting for release %s", release.ID)}
 		case <-timer.C:
 		}
-		release, err = client.GetRelease(pollCtx, release.ID)
+		release, err = client.GetRelease(approvalCtx, release.ID)
 		if err != nil {
-			return err
+			failures++
+			var apiErr *service.HoustonError
+			retryable := !errors.As(err, &apiErr) || apiErr.Status == 429 || apiErr.Status >= 500
+			if !retryable || failures >= 5 {
+				return fmt.Errorf("polling release %s: %w", release.ID, err)
+			}
+			delay := time.Duration(failures) * 200 * time.Millisecond
+			if errors.As(err, &apiErr) && apiErr.RetryAfter > 0 {
+				delay = apiErr.RetryAfter
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-approvalCtx.Done():
+				timer.Stop()
+				return &exitError{code: 6, msg: fmt.Sprintf("timed out waiting for release %s", release.ID)}
+			case <-timer.C:
+			}
+			continue
 		}
+		failures = 0
 	}
 }
 
@@ -108,8 +139,7 @@ func (a *app) followApprovedRelease(ctx context.Context, opts service.ShipOption
 		return nil
 	}
 
-	// Houston left run_id NULL: find the new run ourselves.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 	for {
 		runs, err := opts.Client.ListRuns(ctx, opts.Owner, opts.Repo, opts.Ref)
@@ -125,6 +155,7 @@ func (a *app) followApprovedRelease(ctx context.Context, opts service.ShipOption
 				found = append(found, run)
 			}
 			if len(found) > 0 {
+				sort.Slice(found, func(i, j int) bool { return found[i].ID < found[j].ID })
 				final, followErr := service.FollowRun(ctx, opts, found[0])
 				if followErr != nil {
 					return followErr
