@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -71,6 +72,10 @@ func main() {
 	a := newApp(os.Stdin, os.Stdout, os.Stderr)
 	if err := newRootCmd(a).ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "payload:", err)
+		var coded interface{ ExitCode() int }
+		if errors.As(err, &coded) {
+			os.Exit(coded.ExitCode())
+		}
 		os.Exit(1)
 	}
 }

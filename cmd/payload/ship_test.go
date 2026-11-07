@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -195,5 +196,131 @@ func TestRunShipTUIDetachesPromptly(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "detached") {
 		t.Errorf("stdout = %q, want a detach message", stdout.String())
+	}
+}
+
+func TestCLIShipRequireApproval(t *testing.T) {
+	base := t.TempDir()
+	work := filepath.Join(base, "work")
+	if err := os.MkdirAll(work, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "init", "-b", "main")
+	gitCmd(t, work, "config", "user.name", "Test")
+	gitCmd(t, work, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(work, "go.mod"), []byte("module example.com/app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "add", "go.mod")
+	gitCmd(t, work, "commit", "-m", "initial")
+	head := strings.TrimSpace(gitCmd(t, work, "rev-parse", "HEAD"))
+
+	var releaseBody map[string]any
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/actions/runs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []any{}})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/actions/runs/77":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": 77, "status": "completed", "conclusion": "success", "html_url": "https://example/run/77",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/actions/runs/77/jobs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jobs": []map[string]any{{
+				"id": 7, "name": "deploy", "status": "completed", "conclusion": "success", "steps": []any{},
+			}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/actions/jobs/7/logs":
+			_, _ = w.Write([]byte("approved deploy\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer github.Close()
+
+	polls := 0
+	houston := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			if r.Header.Get("Authorization") != "Bearer houston-token" {
+				t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+			}
+			_ = json.NewDecoder(r.Body).Decode(&releaseBody)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "0123456789abcdef0123456789abcdef", "repo": "owner/repo", "ref": "main", "sha": head,
+				"workflow": "deploy.yml", "status": "pending", "created_at": time.Now().UTC(),
+			})
+		case http.MethodGet:
+			polls++
+			status, runID := "approved", any(nil)
+			if polls >= 2 {
+				status, runID = "dispatched", 77
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "0123456789abcdef0123456789abcdef", "repo": "owner/repo", "ref": "main", "sha": head,
+				"workflow": "deploy.yml", "status": status, "run_id": runID,
+				"run_url": "https://example/run/77", "created_at": time.Now().UTC(),
+			})
+		}
+	}))
+	defer houston.Close()
+
+	t.Chdir(work)
+	t.Setenv("GITHUB_TOKEN", "github-token")
+	t.Setenv("HOUSTON_WEBHOOK_TOKEN", "houston-token")
+
+	stdout, _, err := runCLI(t, "ship", "--require-approval", "--no-push", "--plain",
+		"--repo", "owner/repo", "--api", github.URL, "--houston-url", houston.URL,
+		"--input", "image_tag=abc", "--poll", "1ms", "--timeout", "5s")
+	if err != nil {
+		t.Fatalf("ship approval: %v", err)
+	}
+	if !strings.Contains(stdout, "approved deploy") || !strings.Contains(stdout, "run 77 finished: success") {
+		t.Errorf("stdout = %q", stdout)
+	}
+	if releaseBody["sha"] != head || releaseBody["workflow"] != "deploy.yml" {
+		t.Errorf("release body = %v", releaseBody)
+	}
+	inputs, _ := releaseBody["inputs"].(map[string]any)
+	if inputs["image_tag"] != "abc" {
+		t.Errorf("inputs = %v", inputs)
+	}
+}
+
+func TestCLIShipRequireApprovalRejected(t *testing.T) {
+	base := t.TempDir()
+	work := filepath.Join(base, "work")
+	if err := os.MkdirAll(work, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "init", "-b", "main")
+	gitCmd(t, work, "config", "user.name", "Test")
+	gitCmd(t, work, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(work, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "add", "file")
+	gitCmd(t, work, "commit", "-m", "initial")
+
+	houston := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status := "pending"
+		if r.Method == http.MethodGet {
+			status = "rejected"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "0123456789abcdef0123456789abcdef", "status": status, "created_at": time.Now().UTC(),
+		})
+	}))
+	defer houston.Close()
+
+	t.Chdir(work)
+	t.Setenv("GITHUB_TOKEN", "github-token")
+	t.Setenv("HOUSTON_WEBHOOK_TOKEN", "houston-token")
+	_, _, err := runCLI(t, "ship", "--require-approval", "--no-push", "--plain",
+		"--repo", "owner/repo", "--houston-url", houston.URL, "--poll", "1ms", "--timeout", "5s")
+	if err == nil {
+		t.Fatal("rejected release did not fail")
+	}
+	var coded interface{ ExitCode() int }
+	if !errors.As(err, &coded) || coded.ExitCode() != 3 {
+		t.Fatalf("error = %v, want exit code 3", err)
 	}
 }

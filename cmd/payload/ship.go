@@ -19,16 +19,19 @@ import (
 
 func (a *app) shipCmd() *cobra.Command {
 	var (
-		target   string
-		workflow string
-		repo     string
-		apiURL   string
-		remote   string
-		inputs   []string
-		plain    bool
-		noPush   bool
-		timeout  time.Duration
-		poll     time.Duration
+		target          string
+		workflow        string
+		repo            string
+		apiURL          string
+		remote          string
+		inputs          []string
+		plain           bool
+		noPush          bool
+		requireApproval bool
+		houstonURL      string
+		message         string
+		timeout         time.Duration
+		poll            time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -95,6 +98,13 @@ func (a *app) shipCmd() *cobra.Command {
 				Client:       &service.GitHubClient{BaseURL: baseURL, Token: token},
 			}
 
+			if requireApproval {
+				if !plain && writerIsTerminal(a.stdout) {
+					_, _ = fmt.Fprintln(a.stderr, "note: approval mode streams plain text")
+				}
+				return a.shipWithApproval(ctx, opts, houstonURL, message)
+			}
+
 			if plain || !writerIsTerminal(a.stdout) {
 				opts.Reporter = service.NewPlainReporter(a.stdout)
 				run, err := service.Ship(ctx, opts)
@@ -117,6 +127,9 @@ func (a *app) shipCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "workflow_dispatch input as key=value (repeatable)")
 	cmd.Flags().BoolVar(&plain, "plain", false, "stream plain text instead of the TUI")
 	cmd.Flags().BoolVar(&noPush, "no-push", false, "skip git push (the ref is already on the remote)")
+	cmd.Flags().BoolVar(&requireApproval, "require-approval", false, "queue a houston approval instead of dispatching directly")
+	cmd.Flags().StringVar(&houstonURL, "houston-url", "", "houston base URL (default HOUSTON_URL)")
+	cmd.Flags().StringVar(&message, "message", "", "short release note shown in houston")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "maximum time to wait for the run")
 	cmd.Flags().DurationVar(&poll, "poll", 2*time.Second, "status polling interval")
 	return cmd

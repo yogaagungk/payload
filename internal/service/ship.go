@@ -77,6 +77,23 @@ func Ship(ctx context.Context, opts ShipOptions) (WorkflowRun, error) {
 	if err != nil {
 		return run, err
 	}
+	return FollowRun(ctx, opts, run)
+}
+
+// FollowRun streams an already dispatched run.
+func FollowRun(ctx context.Context, opts ShipOptions, run WorkflowRun) (WorkflowRun, error) {
+	if opts.PollInterval <= 0 {
+		opts.PollInterval = defaultPollInterval
+	}
+	if opts.Timeout <= 0 {
+		opts.Timeout = defaultTimeout
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	started := opts.Now()
+	runCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
 	if opts.Reporter != nil {
 		opts.Reporter.RunStarted(run)
 	}

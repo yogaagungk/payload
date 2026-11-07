@@ -93,8 +93,11 @@ polls the newest matching `workflow_dispatch` run (matched by `head_sha`).
   needs `repo`.
 - `--repo` defaults to the origin remote; `--api` must be https (http only on
   loopback for tests).
-- Approval gating (`--require-approval`) is not implemented yet; it lands in
-  P3 with the houston contract.
+- `--require-approval` posts the release to houston (HOUSTON_URL,
+  HOUSTON_WEBHOOK_TOKEN), polls until dispatched/rejected/expired/
+  dispatch_failed, then streams the run (by `run_id`, or by finding the new
+  run itself when houston left it null). Exit codes: rejected 3, expired 4,
+  dispatch_failed 5, timeout 6.
 
 ## Generated deployment flow (ADR-006)
 
