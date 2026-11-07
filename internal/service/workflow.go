@@ -94,13 +94,6 @@ jobs:
             printf '%%s\n' "${APP_NAME}" "${APP_PORT}" "${CONTAINER_PORT}" "${HEALTH_PATH}" "${IMAGE}:${IMAGE_TAG}" "${GHCR_TOKEN}" "${GITHUB_ACTOR}"
             cat <<'EOSSH'
           set -euo pipefail
-          read -r APP_NAME
-          read -r APP_PORT
-          read -r CONTAINER_PORT
-          read -r HEALTH_PATH
-          read -r IMAGE
-          read -r GHCR_TOKEN
-          read -r GITHUB_ACTOR
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker pull "$IMAGE"
           NEXT="${APP_NAME}-next"
@@ -160,7 +153,7 @@ jobs:
               -o StrictHostKeyChecking=yes \
               -p "${DEPLOY_PORT:-22}" \
               "${DEPLOY_USER}@${DEPLOY_HOST}" \
-              bash -s
+              'IFS= read -r APP_NAME && IFS= read -r APP_PORT && IFS= read -r CONTAINER_PORT && IFS= read -r HEALTH_PATH && IFS= read -r IMAGE && IFS= read -r GHCR_TOKEN && IFS= read -r GITHUB_ACTOR && export APP_NAME APP_PORT CONTAINER_PORT HEALTH_PATH IMAGE GHCR_TOKEN GITHUB_ACTOR && exec bash -s'
 `
 
 // WorkflowYAML renders a fresh deployment workflow.
