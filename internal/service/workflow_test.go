@@ -33,6 +33,7 @@ func TestWorkflowYAML(t *testing.T) {
 		"id: payload-validate",
 		"id: payload-checkout",
 		"ref: ${{ github.event.inputs.sha || github.sha }}",
+		"IMAGE_TAG: ${{ github.event.inputs.image_tag || github.event.inputs.sha || github.sha }}",
 		`release_id:`,
 		"id: payload-build",
 		"id: payload-deploy",

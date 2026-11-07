@@ -54,7 +54,7 @@ env:
   CONTAINER_PORT: "%d"
   HEALTH_PATH: "%s"
   IMAGE: ghcr.io/${{ github.repository }}
-  IMAGE_TAG: ${{ github.event.inputs.image_tag || github.sha }}
+  IMAGE_TAG: ${{ github.event.inputs.image_tag || github.event.inputs.sha || github.sha }}
 
 jobs:
   deploy:
