@@ -69,19 +69,12 @@ func (a *app) shipWithApproval(ctx context.Context, opts service.ShipOptions, ho
 	lastStatus := release.Status
 	failures := 0
 	for {
+		if code, msg, terminal := terminalRelease(release); terminal {
+			return &exitError{code: code, msg: msg}
+		}
 		switch release.Status {
 		case "dispatched":
 			return a.followApprovedRelease(ctx, opts, release, known)
-		case "rejected":
-			return &exitError{code: 3, msg: fmt.Sprintf("release %s rejected", release.ID)}
-		case "expired":
-			return &exitError{code: 4, msg: fmt.Sprintf("release %s expired", release.ID)}
-		case "dispatch_failed":
-			reason := "dispatch failed"
-			if release.Error != nil {
-				reason = *release.Error
-			}
-			return &exitError{code: 5, msg: fmt.Sprintf("release %s: %s", release.ID, reason)}
 		case "pending", "approved":
 		default:
 			return fmt.Errorf("release %s has unknown status %q", release.ID, release.Status)
@@ -120,6 +113,24 @@ func (a *app) shipWithApproval(ctx context.Context, opts service.ShipOptions, ho
 			continue
 		}
 		failures = 0
+	}
+}
+
+// terminalRelease maps terminal houston statuses to CLI exit codes.
+func terminalRelease(release service.HoustonRelease) (code int, message string, terminal bool) {
+	switch release.Status {
+	case "rejected":
+		return 3, fmt.Sprintf("release %s rejected", release.ID), true
+	case "expired":
+		return 4, fmt.Sprintf("release %s expired", release.ID), true
+	case "dispatch_failed":
+		reason := "dispatch failed"
+		if release.Error != nil {
+			reason = *release.Error
+		}
+		return 5, fmt.Sprintf("release %s: %s", release.ID, reason), true
+	default:
+		return 0, "", false
 	}
 }
 

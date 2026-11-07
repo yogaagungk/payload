@@ -1,0 +1,9 @@
+{
+  "repo": "yogaagungk/my-app",
+  "ref": "main",
+  "sha": "0123456789abcdef0123456789abcdef01234567",
+  "workflow": "deploy.yml",
+  "inputs": {"image_tag": "v1.2.3"},
+  "requested_by": "yoga",
+  "message": "release v1.2.3"
+}
