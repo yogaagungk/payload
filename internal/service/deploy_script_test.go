@@ -303,3 +303,20 @@ func TestDeployScriptOptionalEnvFile(t *testing.T) {
 		t.Errorf("existing env file not passed: %s", got)
 	}
 }
+
+func TestDeployScriptRejectsInvalidEnvDir(t *testing.T) {
+	data, err := WorkflowYAML(testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runDeployStep(t, deployScript(t, data), map[string]string{"LANDER_ENV_DIR": "relative/path"})
+	if run.err == nil {
+		t.Fatal("invalid LANDER_ENV_DIR was accepted")
+	}
+	if strings.Contains(strings.ToLower(run.output), "relative/path: command not found") {
+		t.Errorf("env dir was executed: %s", run.output)
+	}
+	if log := readLog(t, run.logDir, "ssh.argv"); log != "" {
+		t.Errorf("ssh ran for an invalid env dir: %s", log)
+	}
+}

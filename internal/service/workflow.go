@@ -103,12 +103,14 @@ jobs:
           app_re='^[a-z0-9][a-z0-9-]{0,62}$'
           port_re='^[0-9]{1,5}$'
           health_re='^/[A-Za-z0-9._~!$&()*+,;=:@%%/?-]*$'
+          env_dir_re='^/[A-Za-z0-9._/-]+$'
           [[ "${IMAGE_TAG}" =~ $image_tag_re ]] || { echo "invalid image_tag" >&2; exit 1; }
           [[ "${APP_NAME}" =~ $app_re ]] || { echo "invalid APP_NAME" >&2; exit 1; }
           [[ "${APP_PORT}" =~ $port_re ]] || { echo "invalid APP_PORT" >&2; exit 1; }
           [[ "${CONTAINER_PORT}" =~ $port_re ]] || { echo "invalid CONTAINER_PORT" >&2; exit 1; }
           [[ "${HEALTH_PATH}" =~ $health_re ]] || { echo "invalid HEALTH_PATH" >&2; exit 1; }
           LANDER_ENV_DIR="${LANDER_ENV_DIR:-/var/lib/lander/env}"
+          [[ "${LANDER_ENV_DIR}" =~ $env_dir_re ]] || { echo "invalid LANDER_ENV_DIR" >&2; exit 1; }
           install -m 700 -d "$HOME/.ssh"
           printf '%%s\n' "${DEPLOY_SSH_KEY}" > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
