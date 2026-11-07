@@ -38,7 +38,8 @@ func TestWorkflowYAML(t *testing.T) {
 		"id: payload-build",
 		"id: payload-deploy",
 		"StrictHostKeyChecking=yes",
-		"/var/lib/lander/env/${APP_NAME}.env",
+		`ENV_FILE="${LANDER_ENV_DIR}/${APP_NAME}.env"`,
+		"ENV_ARGS=(--env-file",
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Errorf("workflow missing %q", want)

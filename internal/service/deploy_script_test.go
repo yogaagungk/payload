@@ -275,3 +275,31 @@ func TestDeployRollbackOnFinalFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestDeployScriptOptionalEnvFile(t *testing.T) {
+	data, err := WorkflowYAML(testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := deployScript(t, data)
+
+	envDir := t.TempDir()
+	empty := runDeployStep(t, script, map[string]string{"LANDER_ENV_DIR": envDir, "FAKE_OLD_EXISTS": "1"})
+	if empty.err != nil {
+		t.Fatalf("deploy without env file: %v\n%s", empty.err, empty.output)
+	}
+	if strings.Contains(readLog(t, empty.logDir, "docker.argv"), "--env-file") {
+		t.Error("missing env file still produced --env-file")
+	}
+
+	if err := os.WriteFile(filepath.Join(envDir, "demo-api.env"), []byte("A=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	present := runDeployStep(t, script, map[string]string{"LANDER_ENV_DIR": envDir, "FAKE_OLD_EXISTS": "1"})
+	if present.err != nil {
+		t.Fatalf("deploy with env file: %v\n%s", present.err, present.output)
+	}
+	if got := readLog(t, present.logDir, "docker.argv"); !strings.Contains(got, "--env-file "+filepath.Join(envDir, "demo-api.env")) {
+		t.Errorf("existing env file not passed: %s", got)
+	}
+}

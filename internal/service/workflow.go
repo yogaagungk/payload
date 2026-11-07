@@ -53,6 +53,7 @@ env:
   APP_PORT: "%d"
   CONTAINER_PORT: "%d"
   HEALTH_PATH: "%s"
+  LANDER_ENV_DIR: "/var/lib/lander/env"
   IMAGE: ghcr.io/${{ github.repository }}
   IMAGE_TAG: ${{ github.event.inputs.image_tag || github.event.inputs.sha || github.sha }}
 
@@ -107,21 +108,27 @@ jobs:
           [[ "${APP_PORT}" =~ $port_re ]] || { echo "invalid APP_PORT" >&2; exit 1; }
           [[ "${CONTAINER_PORT}" =~ $port_re ]] || { echo "invalid CONTAINER_PORT" >&2; exit 1; }
           [[ "${HEALTH_PATH}" =~ $health_re ]] || { echo "invalid HEALTH_PATH" >&2; exit 1; }
+          LANDER_ENV_DIR="${LANDER_ENV_DIR:-/var/lib/lander/env}"
           install -m 700 -d "$HOME/.ssh"
           printf '%%s\n' "${DEPLOY_SSH_KEY}" > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
           printf '%%s\n' "${DEPLOY_KNOWN_HOSTS}" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
           {
-            printf '%%s\n' "${APP_NAME}" "${APP_PORT}" "${CONTAINER_PORT}" "${HEALTH_PATH}" "${IMAGE}:${IMAGE_TAG}" "${GHCR_TOKEN}" "${GITHUB_ACTOR}"
+            printf '%%s\n' "${APP_NAME}" "${APP_PORT}" "${CONTAINER_PORT}" "${HEALTH_PATH}" "${LANDER_ENV_DIR}" "${IMAGE}:${IMAGE_TAG}" "${GHCR_TOKEN}" "${GITHUB_ACTOR}"
             cat <<'EOSSH'
           set -euo pipefail
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker pull "$IMAGE"
+          ENV_FILE="${LANDER_ENV_DIR}/${APP_NAME}.env"
+          ENV_ARGS=()
+          if [ -f "$ENV_FILE" ]; then
+            ENV_ARGS=(--env-file "$ENV_FILE")
+          fi
           NEXT="${APP_NAME}-next"
           OLD="${APP_NAME}-old"
           docker rm -f "$NEXT" >/dev/null 2>&1 || true
-          docker run -d --name "$NEXT" --env-file "/var/lib/lander/env/${APP_NAME}.env" --restart unless-stopped -p "127.0.0.1::${CONTAINER_PORT}" "$IMAGE"
+          docker run -d --name "$NEXT" "${ENV_ARGS[@]}" --restart unless-stopped -p "127.0.0.1::${CONTAINER_PORT}" "$IMAGE"
           candidate_port=$(docker port "$NEXT" "${CONTAINER_PORT}/tcp" | awk -F: 'NR==1 {print $NF}')
           case "$candidate_port" in
             ''|*[!0-9]*) echo "could not read candidate port" >&2; docker rm -f "$NEXT" >/dev/null 2>&1 || true; exit 1 ;;
@@ -144,7 +151,7 @@ jobs:
             docker stop "$APP_NAME" >/dev/null
             docker rename "$APP_NAME" "$OLD"
           fi
-          if ! docker run -d --name "$APP_NAME" --env-file "/var/lib/lander/env/${APP_NAME}.env" --restart unless-stopped -p "127.0.0.1:${APP_PORT}:${CONTAINER_PORT}" "$IMAGE"; then
+          if ! docker run -d --name "$APP_NAME" "${ENV_ARGS[@]}" --restart unless-stopped -p "127.0.0.1:${APP_PORT}:${CONTAINER_PORT}" "$IMAGE"; then
             echo "final container failed to start; restarting previous" >&2
             docker rm -f "$APP_NAME" >/dev/null 2>&1 || true
             if docker inspect "$OLD" >/dev/null 2>&1; then docker start "$OLD" >/dev/null || true; fi
@@ -175,7 +182,7 @@ jobs:
               -o StrictHostKeyChecking=yes \
               -p "${DEPLOY_PORT:-22}" \
               "${DEPLOY_USER}@${DEPLOY_HOST}" \
-              'IFS= read -r APP_NAME && IFS= read -r APP_PORT && IFS= read -r CONTAINER_PORT && IFS= read -r HEALTH_PATH && IFS= read -r IMAGE && IFS= read -r GHCR_TOKEN && IFS= read -r GITHUB_ACTOR && export APP_NAME APP_PORT CONTAINER_PORT HEALTH_PATH IMAGE GHCR_TOKEN GITHUB_ACTOR && exec bash -s'
+              'IFS= read -r APP_NAME && IFS= read -r APP_PORT && IFS= read -r CONTAINER_PORT && IFS= read -r HEALTH_PATH && IFS= read -r LANDER_ENV_DIR && IFS= read -r IMAGE && IFS= read -r GHCR_TOKEN && IFS= read -r GITHUB_ACTOR && export APP_NAME APP_PORT CONTAINER_PORT HEALTH_PATH LANDER_ENV_DIR IMAGE GHCR_TOKEN GITHUB_ACTOR && exec bash -s'
 `
 
 // WorkflowYAML renders a fresh deployment workflow.
