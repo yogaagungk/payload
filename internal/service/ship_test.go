@@ -63,6 +63,7 @@ type shipServer struct {
 	conclusion  string
 	dispatched  []map[string]any
 	rateLimited bool
+	tailAfter   int
 }
 
 func newShipServer(t *testing.T, conclusion string, completeAt int) (*shipServer, *httptest.Server) {
@@ -148,11 +149,14 @@ func newShipServer(t *testing.T, conclusion string, completeAt int) (*shipServer
 				return
 			}
 			run.logCalls++
-			if run.logCalls == 1 {
-				_, _ = w.Write([]byte("line1\n"))
-			} else {
-				_, _ = w.Write([]byte("line1\nline2\n"))
+			content := "line1\n"
+			if run.logCalls >= 2 {
+				content = "line1\nline2\n"
 			}
+			if state.tailAfter > 0 && run.logCalls >= state.tailAfter && run.status == "completed" {
+				content += "tail\n"
+			}
+			_, _ = w.Write([]byte(content))
 		default:
 			http.NotFound(w, r)
 		}
@@ -335,5 +339,26 @@ func TestPollDelayBackoff(t *testing.T) {
 		if got := pollDelay(tt.base, tt.elapsed); got != tt.want {
 			t.Errorf("pollDelay(%s, %s) = %s, want %s", tt.base, tt.elapsed, got, tt.want)
 		}
+	}
+}
+
+func TestShipFetchesLogTailAfterCompletion(t *testing.T) {
+	state, server := newShipServer(t, "success", 3)
+	defer server.Close()
+	state.tailAfter = 2
+
+	reporter := &recordingReporter{}
+	_, err := Ship(context.Background(), ShipOptions{
+		Owner: "o", Repo: "r", Ref: "main", Workflow: "deploy.yml",
+		PollInterval: time.Millisecond,
+		Timeout:      time.Second,
+		Client:       &GitHubClient{BaseURL: server.URL, HTTPClient: server.Client()},
+		Reporter:     reporter,
+	})
+	if err != nil {
+		t.Fatalf("Ship: %v", err)
+	}
+	if got := reporter.logs(); got != "line1\nline2\ntail\n" {
+		t.Errorf("logs = %q, want the post-completion tail", got)
 	}
 }

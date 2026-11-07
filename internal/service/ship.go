@@ -116,11 +116,12 @@ func Ship(ctx context.Context, opts ShipOptions) (WorkflowRun, error) {
 		if opts.Reporter != nil {
 			opts.Reporter.Update(run, jobs)
 		}
-		streamLogs(runCtx, opts, jobs, printed, finalFetched, run.Status == "completed")
+		streamLogs(runCtx, opts, jobs, printed, finalFetched, false, false)
 
 		if run.Status == "completed" {
-			// A final pass catches logs that only became available at the end.
-			streamLogs(runCtx, opts, jobs, printed, finalFetched, true)
+			// Force one last fetch: GitHub can lag on the tail of a job's log
+			// even after the job has a conclusion.
+			streamLogs(runCtx, opts, jobs, printed, finalFetched, true, true)
 			if run.Conclusion != "success" {
 				return run, fmt.Errorf("run %d completed with %q", run.ID, run.Conclusion)
 			}
@@ -237,12 +238,12 @@ func workflowPath(workflow string) string {
 	return ".github/workflows/" + workflow
 }
 
-func streamLogs(ctx context.Context, opts ShipOptions, jobs []Job, printed map[int64]int, finalFetched map[int64]bool, final bool) {
+func streamLogs(ctx context.Context, opts ShipOptions, jobs []Job, printed map[int64]int, finalFetched map[int64]bool, final, force bool) {
 	if opts.Reporter == nil {
 		return
 	}
 	for _, job := range jobs {
-		if finalFetched[job.ID] {
+		if finalFetched[job.ID] && !force {
 			continue
 		}
 		if !final && job.Conclusion == "success" && printed[job.ID] > 0 {
