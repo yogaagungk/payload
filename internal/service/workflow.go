@@ -29,6 +29,16 @@ on:
         required: false
         default: ""
         type: string
+      release_id:
+        description: "houston approval id (optional)"
+        required: false
+        default: ""
+        type: string
+      sha:
+        description: "Exact commit to deploy (houston approval)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -50,9 +60,21 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - id: payload-validate
+        name: Validate dispatch inputs
+        env:
+          RELEASE_SHA: ${{ github.event.inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$RELEASE_SHA" ]; then
+            [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid sha input" >&2; exit 1; }
+          fi
+
       - id: payload-checkout
         name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.sha || github.sha }}
 
       - id: payload-build
         name: Build and push image
