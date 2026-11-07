@@ -76,11 +76,18 @@ current branch) with the local git CLI, dispatches
 polls the newest matching `workflow_dispatch` run (matched by `head_sha`).
 
 - Default output is a bubbletea TUI with run/job/step status and log tail;
-  `--plain` (or a non-terminal stdout) streams plain text.
+  `q`/Esc detaches and leaves the run going on GitHub. `--plain` (or a
+  non-terminal stdout) streams plain text; SIGINT cancels the wait.
 - GitHub returns job logs only when they become available; statuses are live
   and each job's log is printed incrementally as the API serves it. A failed
   run exits non-zero after printing the conclusion and run URL.
-- `--poll` (default 2s) and `--timeout` (default 30m) control waiting.
+- `--poll` (default 2s, backing off to 5s/10s) and `--timeout` (default 30m)
+  control waiting; 403/429 responses honour `Retry-After`/rate-limit reset.
+- The token is checked before the push, so a missing token never leaves a
+  half-done ship. Dirty trees and a `--target` different from the current
+  branch produce a warning; if no matching run appears after 60 s a hint is
+  printed. Log output is stripped of terminal control sequences except
+  newlines, tabs and SGR colours.
 - The token comes from `GITHUB_TOKEN` or a hidden prompt, never a flag. A
   fine-grained PAT needs Actions: write and Contents: read; a classic PAT
   needs `repo`.

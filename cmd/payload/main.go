@@ -2,9 +2,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -62,8 +65,11 @@ func (a *app) versionCmd() *cobra.Command {
 }
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	a := newApp(os.Stdin, os.Stdout, os.Stderr)
-	if err := newRootCmd(a).Execute(); err != nil {
+	if err := newRootCmd(a).ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "payload:", err)
 		os.Exit(1)
 	}

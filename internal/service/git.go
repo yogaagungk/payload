@@ -42,6 +42,11 @@ func (g Git) RemoteURL(ctx context.Context) (string, error) {
 	return g.run(ctx, "config", "--get", "remote.origin.url")
 }
 
+// Status returns porcelain status output (empty when clean).
+func (g Git) Status(ctx context.Context) (string, error) {
+	return g.run(ctx, "status", "--porcelain")
+}
+
 // Push pushes HEAD to branch on remote.
 func (g Git) Push(ctx context.Context, remote, branch string) error {
 	_, err := g.run(ctx, "push", remote, "HEAD:"+branch)

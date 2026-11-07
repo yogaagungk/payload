@@ -38,11 +38,11 @@ func (a *app) shipCmd() *cobra.Command {
 			ctx := cmd.Context()
 			git := service.Git{Dir: "."}
 
+			current, currentErr := git.CurrentBranch(ctx)
 			branch := target
 			if branch == "" {
-				current, err := git.CurrentBranch(ctx)
-				if err != nil {
-					return fmt.Errorf("resolve current branch: %w", err)
+				if currentErr != nil {
+					return fmt.Errorf("resolve current branch: %w", currentErr)
 				}
 				branch = current
 			}
@@ -66,15 +66,22 @@ func (a *app) shipCmd() *cobra.Command {
 				return err
 			}
 
+			token, err := a.githubToken()
+			if err != nil {
+				return err
+			}
+
+			if currentErr == nil && target != "" && target != current {
+				_, _ = fmt.Fprintf(a.stderr, "warning: shipping HEAD of %s to %s\n", current, target)
+			}
+			if status, statusErr := git.Status(ctx); statusErr == nil && strings.TrimSpace(status) != "" {
+				_, _ = fmt.Fprintln(a.stderr, "warning: working tree has uncommitted changes; only the pushed commit is deployed")
+			}
+
 			if !noPush {
 				if err := git.Push(ctx, remote, branch); err != nil {
 					return err
 				}
-			}
-
-			token, err := a.githubToken()
-			if err != nil {
-				return err
 			}
 			opts := service.ShipOptions{
 				Owner:        owner,
@@ -116,7 +123,16 @@ func (a *app) shipCmd() *cobra.Command {
 }
 
 func (a *app) runShipTUI(ctx context.Context, opts service.ShipOptions) error {
-	program := tea.NewProgram(tui.New(), tea.WithAltScreen())
+	return a.runShipTUIWith(ctx, opts, func(model tui.Model) *tea.Program {
+		return tea.NewProgram(model, tea.WithAltScreen())
+	})
+}
+
+func (a *app) runShipTUIWith(ctx context.Context, opts service.ShipOptions, newProgram func(tui.Model) *tea.Program) error {
+	shipCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	program := newProgram(tui.New())
 	type result struct {
 		run service.WorkflowRun
 		err error
@@ -125,7 +141,7 @@ func (a *app) runShipTUI(ctx context.Context, opts service.ShipOptions) error {
 
 	go func() {
 		opts.Reporter = tui.ProgramReporter{Program: program}
-		run, err := service.Ship(ctx, opts)
+		run, err := service.Ship(shipCtx, opts)
 		results <- result{run: run, err: err}
 		program.Send(tui.DoneMsg{Run: run, Err: err})
 	}()
@@ -134,8 +150,20 @@ func (a *app) runShipTUI(ctx context.Context, opts service.ShipOptions) error {
 	if err != nil {
 		return fmt.Errorf("tui: %w", err)
 	}
+	model, _ := finalModel.(tui.Model)
+	if !model.Done() {
+		// Explicit detach (q/Esc/Ctrl+C): stop polling, leave the run alive.
+		cancel()
+		if run := model.Run(); run != nil && run.ID != 0 {
+			_, _ = fmt.Fprintf(a.stdout, "detached: run %d continues on GitHub: %s\n", run.ID, run.HTMLURL)
+		} else {
+			_, _ = fmt.Fprintln(a.stdout, "detached; the workflow continues on GitHub")
+		}
+		return nil
+	}
+
 	res := <-results
-	if model, ok := finalModel.(tui.Model); ok && res.run.ID == 0 {
+	if res.run.ID == 0 {
 		if run := model.Run(); run != nil {
 			res.run = *run
 		}

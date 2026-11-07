@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,6 +19,37 @@ const (
 	defaultGitHubAPI = "https://api.github.com"
 	maxErrorSnippet  = 512
 )
+
+// RateLimitError reports a 403/429 response with GitHub's retry hint.
+type RateLimitError struct {
+	Status     int
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("github rate limited (%d), retry after %s", e.Status, e.RetryAfter)
+}
+
+func rateLimitFrom(resp *http.Response) error {
+	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests {
+		return nil
+	}
+	wait := 60 * time.Second
+	if value := resp.Header.Get("Retry-After"); value != "" {
+		if seconds, err := strconv.Atoi(value); err == nil {
+			wait = time.Duration(seconds) * time.Second
+		}
+	} else if value := resp.Header.Get("X-RateLimit-Reset"); value != "" {
+		if epoch, err := strconv.ParseInt(value, 10, 64); err == nil {
+			if until := time.Until(time.Unix(epoch, 0)); until > 0 {
+				wait = until
+			} else {
+				wait = 0
+			}
+		}
+	}
+	return &RateLimitError{Status: resp.StatusCode, RetryAfter: wait}
+}
 
 // GitHubClient is a small REST client for workflow dispatch and run data.
 type GitHubClient struct {
@@ -104,6 +136,9 @@ func (c *GitHubClient) do(ctx context.Context, method, path string, body, out an
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if rateErr := rateLimitFrom(resp); rateErr != nil {
+		return rateErr
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorSnippet))
 		return fmt.Errorf("github api %s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(snippet)))
@@ -177,6 +212,9 @@ func (c *GitHubClient) JobLogs(ctx context.Context, owner, repo string, jobID in
 		return "", false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if rateErr := rateLimitFrom(resp); rateErr != nil {
+		return "", false, rateErr
+	}
 	switch resp.StatusCode {
 	case http.StatusNotFound, http.StatusGone:
 		return "", false, nil

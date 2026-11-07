@@ -53,8 +53,11 @@ func TestModelTrimsLogBuffer(t *testing.T) {
 
 func TestModelQuitKey(t *testing.T) {
 	model := New()
-	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if cmd == nil {
 		t.Error("q should quit")
+	}
+	if updated.(Model).Done() {
+		t.Error("a user detach must not mark the run as done")
 	}
 }

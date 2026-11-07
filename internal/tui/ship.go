@@ -69,7 +69,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.run = &run
 		m.jobs = value.Jobs
 	case LogMsg:
-		for _, line := range strings.Split(strings.TrimRight(value.Chunk, "\n"), "\n") {
+		for _, line := range strings.Split(strings.TrimRight(service.SanitizeLog(value.Chunk), "\n"), "\n") {
 			m.lines = append(m.lines, fmt.Sprintf("%s %s", dimStyle.Render("["+value.Job+"]"), line))
 		}
 		if len(m.lines) > m.maxLines {
@@ -139,6 +139,9 @@ func (m Model) View() string {
 // Err returns the final error after the program exits.
 func (m Model) Err() error { return m.runErr }
 
+// Done reports whether the run finished (as opposed to a user detach).
+func (m Model) Done() bool { return m.done }
+
 // Run returns the final run state.
 func (m Model) Run() *service.WorkflowRun { return m.run }
 
@@ -173,4 +176,9 @@ func (r ProgramReporter) Update(run service.WorkflowRun, jobs []service.Job) {
 // Log implements service.Reporter.
 func (r ProgramReporter) Log(job, chunk string) {
 	r.Program.Send(LogMsg{Job: job, Chunk: chunk})
+}
+
+// Warn implements service.Warner.
+func (r ProgramReporter) Warn(message string) {
+	r.Program.Send(LogMsg{Job: "payload", Chunk: "warning: " + message + "\n"})
 }
