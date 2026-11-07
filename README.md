@@ -122,13 +122,13 @@ Example output (example data):
 ```text
 run 1234567890: https://github.com/example-org/orbit-demo/actions/runs/1234567890
 run: in_progress
-job Build and push image: in_progress
+job deploy: in_progress
+  step Validate dispatch inputs: completed
   step Checkout: completed
   step Build and push image: in_progress
-[Build and push image] exporting to image
+[deploy] exporting to image
 run: completed
-job Build and push image: completed
-job Deploy over SSH: completed
+job deploy: completed
 run 1234567890 finished: success (https://github.com/example-org/orbit-demo/actions/runs/1234567890)
 ```
 
@@ -147,6 +147,8 @@ release 4f2c9a1b8d3e7f605a4b2c1d9e8f7a6b: approved
 release 4f2c9a1b8d3e7f605a4b2c1d9e8f7a6b: dispatched
 run 1234567890 finished: success (https://github.com/example-org/orbit-demo/actions/runs/1234567890)
 ```
+
+Approval mode always streams plain text: if stdout is a terminal, `ship` prints a note and does not start the TUI. The TUI is used only for a direct ship.
 
 Re-run without pushing again, or deploy a specific image tag:
 
@@ -225,7 +227,7 @@ Required repository secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PORT`, `DEPLO
 - The GitHub token comes from `GITHUB_TOKEN` or a hidden prompt, is checked before the push, and is never written to disk or accepted as a flag.
 - `--api` and `--houston-url` must be https; plain http is accepted only on loopback for local tests.
 - The deploy job uses `StrictHostKeyChecking=yes` with a pinned `DEPLOY_KNOWN_HOSTS`; the SSH key is written as `0600` only inside the runner.
-- Inputs are validated twice, in the runner script and again on the VPS. Values travel on stdin, not in the SSH command line.
+- Inputs are validated on the runner (image tag, app name, ports, health path, env directory); values then travel on stdin, never in the SSH command line.
 - The container runs unprivileged where the base image allows it (Go uses distroless `nonroot`) and binds only to a loopback port on the VPS; the public vhost is lander's.
 - Approval is enforced outside payload: houston verifies the branch head before dispatch and uses its own server-side PAT. A payload caller can queue a release but cannot approve it.
 - Logs are stripped of terminal control sequences except newlines, tabs and SGR colours; `--plain` is automatic when stdout is not a terminal.
